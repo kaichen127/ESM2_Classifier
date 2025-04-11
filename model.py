@@ -28,6 +28,8 @@ class PTMPredictionModel(nn.Module):
         freeze_backbone_layers = configs.model.freeze_backbone_layers
         classifier_dropout_rate = configs.model.classifier_dropout_rate
         backbone_dropout_rate = configs.model.backbone_dropout_rate
+        self.use_decoder_block = getattr(configs.model, "use_decoder_block", False)
+        esm_to_decoder_dropout_rate = configs.model.last_state_dropout_rate
 
         # 2. Load the pretrained transformer
         config = AutoConfig.from_pretrained(base_model_name)
@@ -67,23 +69,58 @@ class PTMPredictionModel(nn.Module):
                         layer.intermediate.dropout = nn.Dropout(backbone_dropout_rate)
                         layer.output.dropout = nn.Dropout(backbone_dropout_rate)
 
+        # 4. Add condition embeddings and decoder block
+        if self.use_decoder_block:
+            # Condition embedding
+            self.condition_embedding = nn.Embedding(
+                num_embeddings=configs.model.num_conditions,
+                embedding_dim=hidden_size
+            )
 
-        # 4. Add classifier on top
+            self.encoder_to_decoder_dropout = nn.Dropout(esm_to_decoder_dropout_rate)
+
+            # Transformer decoder with cross-attention
+            decoder_layer = nn.TransformerDecoderLayer(
+                d_model=hidden_size,
+                nhead=configs.transformer_head.num_heads,
+                dim_feedforward=configs.transformer_head.dim_feedforward,
+                dropout=configs.transformer_head.dropout,
+                batch_first=True
+            )
+            self.transformer_decoder = nn.TransformerDecoder(
+                decoder_layer, num_layers=configs.transformer_head.num_layers
+            )
+
+            self.norm = nn.LayerNorm(hidden_size)
+            self.dropout = nn.Dropout(classifier_dropout_rate)
+
+        # 5. Add classifier on top
         self.classifier = nn.Linear(hidden_size, num_labels)
 
-    def forward(self, input_ids, attention_mask):
+    def forward(self, input_ids, attention_mask, condition_idx=None):
         """
         Forward pass for the PTM prediction model.
 
         Args:
             input_ids (Tensor): Input token IDs.
             attention_mask (Tensor): Attention mask for padding.
+            condition_idx (Tensor, optional): Condition indices for the decoder block.
 
         Returns:
             Tensor: Logits for each residue in the input sequence.
         """
         outputs = self.base_model(input_ids=input_ids, attention_mask=attention_mask)
         sequence_output = outputs.last_hidden_state # Shape: [batch_size, seq_len, hidden_size]
+        if self.use_decoder_block:
+            sequence_output = self.encoder_to_decoder_dropout(sequence_output)
+            condition_repr = self.condition_embedding(condition_idx).unsqueeze(1)
+            sequence_output = self.transformer_decoder(
+                tgt=sequence_output,
+                memory=condition_repr
+            )
+            sequence_output = self.norm(sequence_output)
+            sequence_output = self.dropout(sequence_output)
+
         logits = self.classifier(sequence_output)
         return logits
 
@@ -151,7 +188,8 @@ if __name__ == '__main__':
 
     # Forward pass through the model
     with torch.no_grad():  # Disable gradient computation for inference
-        logits = model(**inputs)
+        condition_idx = torch.tensor([0], device=device)
+        logits = model(**inputs, condition_idx=condition_idx)
         print(f"Logits shape: {logits.shape}")  # Shape: [batch_size, sequence_length, num_labels]
         # Print the logits tensor
         # print("Logits values:")
