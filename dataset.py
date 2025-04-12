@@ -3,7 +3,13 @@ from torch.utils.data import Dataset, DataLoader
 import ast
 import pandas as pd
 from transformers import AutoTokenizer
+import os
 
+def build_condition2idx(ptm_types):
+    return {ptm: idx for idx, ptm in enumerate(sorted(set(ptm_types)))}
+
+def idx2condition(ptm_types):
+    return {idx: ptm for idx, ptm in enumerate(sorted(set(ptm_types)))}
 
 class PTMDataset(Dataset):
     def __init__(self, file_path, tokenizer, max_length=512, subset_size=None):
@@ -14,13 +20,9 @@ class PTMDataset(Dataset):
             max_length (int): Maximum length for tokenized sequences.
         """
 
-        # validate_position_column(file_path)
-
         self.data = pd.read_csv(file_path)
 
-        # If we only want a small subset to test quickly:
         if subset_size is not None:
-            # Randomly sample 'subset_size' rows from dataset
             self.data = self.data.sample(n=subset_size, random_state=42).reset_index(drop=True)
 
 
@@ -62,10 +64,80 @@ class PTMDataset(Dataset):
             "mask": mask
         }
 
+class MultiPTMDataset(Dataset):
+    def __init__(self, ptm_list, data_root, tokenizer, condition2idx, split="train", max_length=512, subset_size=None):
+        """
+        Args:
+            ptm_list (list): List of PTM types like ["Phosphorylation", "Methylation", ...]
+            data_root (str): Root directory containing split folders (train/valid/test) each with PTM CSVs
+            tokenizer: Hugging Face tokenizer.
+            condition2idx (dict): Mapping from condition name to index.
+            split (str): One of 'train', 'valid', or 'test'.
+            max_length (int): Max sequence length.
+        """
+        self.data = []
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+        self.condition2idx = condition2idx
+
+        for ptm_type in ptm_list:
+            file_path = os.path.join(data_root, split, f"{ptm_type}.csv")  # e.g. ptm_data/train/Methylation.csv
+            if not os.path.exists(file_path):
+                print(f"[Warning] File not found: {file_path}")
+                continue
+
+            df = pd.read_csv(file_path)
+
+            for _, row in df.iterrows():
+                sequence = row['Sequence']
+                try:
+                    positions = [p - 1 for p in ast.literal_eval(str(row['position']))]
+                    amino_acids = ast.literal_eval(str(row['amino acid']))
+                except Exception as e:
+                    print(f"Skipping bad row in {file_path}: {e}")
+                    continue
+
+                self.data.append({
+                    "sequence": sequence,
+                    "positions": positions,
+                    "amino_acids": amino_acids,
+                    "condition": ptm_type,
+                    "condition_idx": condition2idx[ptm_type]
+                })
+
+        if subset_size is not None:
+            import random
+            self.data = random.sample(self.data, subset_size)
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        entry = self.data[idx]
+        inputs = self.tokenizer(entry["sequence"], return_tensors="pt", padding="max_length",
+                                truncation=True, max_length=self.max_length, add_special_tokens=False)
+
+        labels = torch.zeros(self.max_length, dtype=torch.long)
+        mask = torch.zeros(self.max_length, dtype=torch.bool)
+
+        for pos, aa in zip(entry["positions"], entry["amino_acids"]):
+            if pos < self.max_length and entry["sequence"][pos] == aa:
+                labels[pos] = 1
+                mask[pos] = True
+
+        return {
+            "input_ids": inputs["input_ids"].squeeze(0),
+            "attention_mask": inputs["attention_mask"].squeeze(0),
+            "labels": labels,
+            "mask": mask,
+            "condition_idx": torch.tensor(entry["condition_idx"], dtype=torch.long)
+        }
+
 
 def prepare_dataloaders(configs, debug = False, debug_subset_size=None):
     """
     Prepares DataLoaders for training, validation, and testing based on configurations.
+    Supports both singular and multi-PTM datasets.
 
     Args:
         configs: Configuration object containing file paths and DataLoader settings.
@@ -76,74 +148,96 @@ def prepare_dataloaders(configs, debug = False, debug_subset_size=None):
     from transformers import AutoTokenizer
 
     model_name = configs.model.model_name
-
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-
     dataloaders = {}
 
-    # Prepare training DataLoader
-    if hasattr(configs, 'train_settings'):
-        train_file = configs.train_settings.train_path
-        batch_size = configs.train_settings.batch_size
-        max_length = configs.train_settings.max_sequence_length
-        shuffle = configs.train_settings.shuffle
-        num_workers = configs.train_settings.num_workers
+    if configs.model.use_decoder_block:
+        # MultiPTM dataset
+        ptm_list = configs.ptm_types  # e.g., ["Phosphorylation", "Methylation"]
+        condition2idx = build_condition2idx(ptm_list)
+        data_root = configs.data_root
 
-        train_dataset = PTMDataset(
-            train_file,
-            tokenizer,
-            max_length=max_length,
-            subset_size=debug_subset_size if debug else None
-        )
-        dataloaders["train"] = DataLoader(
-            train_dataset,
-            batch_size=batch_size,
-            shuffle=shuffle,
-            num_workers=num_workers,
-            pin_memory=True
-        )
+        for split in ["train", "valid", "test"]:
+            dataset = MultiPTMDataset(
+                ptm_list,
+                data_root,
+                tokenizer,
+                condition2idx,
+                split=split if split != "valid" else "test",
+                max_length=configs.train_settings.max_sequence_length,
+                subset_size=debug_subset_size if debug else None
+            )
+            dataloaders[split] = DataLoader(
+                dataset,
+                batch_size=configs.train_settings.batch_size,
+                shuffle=(split == "train") and configs.train_settings.shuffle,
+                num_workers=configs.train_settings.num_workers,
+                pin_memory=True
+            )
+    else:
+        # Singular PTM dataset
+        if hasattr(configs, 'train_settings'):
+            train_file = configs.train_settings.train_path
+            batch_size = configs.train_settings.batch_size
+            max_length = configs.train_settings.max_sequence_length
+            shuffle = configs.train_settings.shuffle
+            num_workers = configs.train_settings.num_workers
 
-    # Prepare validation DataLoader
-    if hasattr(configs, 'valid_settings'):
-        valid_file = configs.valid_settings.valid_path
-        batch_size = configs.valid_settings.batch_size
-        max_length = configs.train_settings.max_sequence_length
-        num_workers = configs.valid_settings.num_workers
+            train_dataset = PTMDataset(
+                train_file,
+                tokenizer,
+                max_length=max_length,
+                subset_size=debug_subset_size if debug else None
+            )
+            dataloaders["train"] = DataLoader(
+                train_dataset,
+                batch_size=batch_size,
+                shuffle=shuffle,
+                num_workers=num_workers,
+                pin_memory=True
+            )
 
-        valid_dataset = PTMDataset(
-            valid_file,
-            tokenizer,
-            max_length=max_length,
-            subset_size=debug_subset_size if debug else None
-        )
-        dataloaders["valid"] = DataLoader(
-            valid_dataset,
-            batch_size=batch_size,
-            shuffle=False,
-            num_workers=num_workers,
-            pin_memory=True
-        )
+        # Prepare validation DataLoader
+        if hasattr(configs, 'valid_settings'):
+            valid_file = configs.valid_settings.valid_path
+            batch_size = configs.valid_settings.batch_size
+            max_length = configs.train_settings.max_sequence_length
+            num_workers = configs.valid_settings.num_workers
 
-    # Prepare test DataLoader
-    if hasattr(configs, 'test_settings'):
-        test_file = configs.test_settings.test_path
-        batch_size = configs.test_settings.batch_size
-        max_length = configs.train_settings.max_sequence_length
-        num_workers = configs.test_settings.get('num_workers', 0)
+            valid_dataset = PTMDataset(
+                valid_file,
+                tokenizer,
+                max_length=max_length,
+                subset_size=debug_subset_size if debug else None
+            )
+            dataloaders["valid"] = DataLoader(
+                valid_dataset,
+                batch_size=batch_size,
+                shuffle=False,
+                num_workers=num_workers,
+                pin_memory=True
+            )
 
-        test_dataset = PTMDataset(
-            test_file,
-            tokenizer,
-            max_length=max_length,
-            subset_size=debug_subset_size if debug else None
-        )
-        dataloaders["test"] = DataLoader(
-            test_dataset,
-            batch_size=batch_size,
-            shuffle=False,
-            num_workers=num_workers,
-            pin_memory=True
-        )
+        # Prepare test DataLoader
+        if hasattr(configs, 'test_settings'):
+            test_file = configs.test_settings.test_path
+            batch_size = configs.test_settings.batch_size
+            max_length = configs.train_settings.max_sequence_length
+            num_workers = configs.test_settings.get('num_workers', 0)
+
+            test_dataset = PTMDataset(
+                test_file,
+                tokenizer,
+                max_length=max_length,
+                subset_size=debug_subset_size if debug else None
+            )
+            dataloaders["test"] = DataLoader(
+                test_dataset,
+                batch_size=batch_size,
+                shuffle=False,
+                num_workers=num_workers,
+                pin_memory=True
+            )
 
     return dataloaders
 
@@ -341,7 +435,8 @@ if __name__ == '__main__':
 
     configs = Box(config_data)
 
-    analyze_protein_data(configs)
+    if not configs.model.use_decoder_block:
+        analyze_protein_data(configs)
 
     # Prepare DataLoaders
     dataloaders = prepare_dataloaders(configs)

@@ -12,7 +12,7 @@ model:
   freeze_backbone_layers: 10
   classifier_dropout_rate: 0.5
   backbone_dropout_rate: 0.30
-  use_decoder_block: True
+  use_decoder_block: true
   last_state_dropout_rate: 0.00
   num_conditions: 9
 
@@ -30,7 +30,7 @@ train_settings:
   num_epochs: 24
   shuffle: True
   mixed_precision: bf16
-  batch_size: 8
+  batch_size: 64
   num_workers: 4
   grad_accumulation: 4
   grad_clip_norm: 1
@@ -103,3 +103,15 @@ transformer_head:
   num_layers: 2
   dim_feedforward: 1024
   dropout: 0.1
+
+data_root: "./ptm_data"
+ptm_types:
+  - Acetylation
+  - Methylation
+  - N-linked_Glycosylation
+  - O-linked_Glycosylation
+  - Phosphorylation
+  - Phosphorylation_S_and_T
+  - Phosphorylation_Y
+  - Succinylation
+  - Ubiquitylation
