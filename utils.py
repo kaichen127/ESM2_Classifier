@@ -129,7 +129,7 @@ def prepare_saving_dir(configs, config_file_path):
     # Optionally label the run_id with the dataset name
     if configs.train_settings.train_path:
         train_path = configs.train_settings.train_path
-        dataset_name = os.path.basename(train_path).replace('final_', '').replace('.csv', '')  # Extract and clean the name
+        dataset_name = os.path.basename(train_path).replace('.csv', '')  # Extract and clean the name
         run_id += f"__{dataset_name}"
 
     # Create the result directory and the checkpoint subdirectory.

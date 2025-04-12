@@ -71,6 +71,7 @@ class PTMPredictionModel(nn.Module):
 
         # 4. Add condition embeddings and decoder block
         if self.use_decoder_block:
+            print("Using embeddings and decoder block")
             # Condition embedding
             self.condition_embedding = nn.Embedding(
                 num_embeddings=configs.model.num_conditions,
