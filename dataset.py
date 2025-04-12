@@ -270,9 +270,6 @@ def analyze_protein_data(configs):
             lengths = data["Sequence"].apply(len).tolist()
             all_lengths.extend(lengths)
 
-            # -------------------------------------
-            # Existing logic: Count overall phospho vs non-phospho
-            # -------------------------------------
             for _, row in data.iterrows():
                 sequence = row["Sequence"]
                 # parse positions, subtract 1 for zero-based
@@ -289,21 +286,12 @@ def analyze_protein_data(configs):
             for sequence in data["Sequence"]:
                 amino_acid_counts.update(sequence)
 
-            # -------------------------------------
-            # NEW PART: Check 'amino acid' column
-            # -------------------------------------
-            # If your CSV has a column called 'amino acid' that lists the
-            # amino acids at the phosphorylation positions, gather them:
             if 'amino acid' in data.columns:
-                # 1. Find all amino acids that appear in 'amino acid' column
                 phospho_aa_set = set()
                 for _, row in data.iterrows():
-                    # parse the list, e.g. ["S", "T"]
                     aa_list = eval(row["amino acid"])
                     phospho_aa_set.update(aa_list)
 
-                # 2. Now count how often those "phospho AAs" appear
-                #    as phosphorylated vs. unphosphorylated in the sequences.
                 phosphorylated_count_for_phospho_aa = 0
                 unphosphorylated_count_for_phospho_aa = 0
 
@@ -333,9 +321,6 @@ def analyze_protein_data(configs):
             else:
                 print(f"No 'amino acid' column found in {file_path}, skipping matching-amino-acid stats.")
 
-            # -------------------------------------
-            # Existing prints
-            # -------------------------------------
             print(f"Statistics for {file_path}:")
             print(f"  Total sequences: {len(lengths)}")
             print(f"  Median length: {np.median(lengths):.2f}")
