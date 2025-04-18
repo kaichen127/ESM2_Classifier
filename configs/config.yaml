@@ -3,6 +3,7 @@ checkpoints_every: 1
 tensorboard_log: True
 tqdm_progress_bar: True
 result_path: ./results/test/
+data_type: ALL
 
 model:
   model_name: facebook/esm2_t12_35M_UR50D
@@ -50,7 +51,7 @@ test_settings:
 #  test_path: ./ptm_data/test/Succinylation.csv
 #  test_path: ./ptm_data/test/Ubiquitylation.csv
 
-  batch_size: 8
+  batch_size: 64
 
 valid_settings:
 #  valid_path: ./ptm_data/valid/Phosphorylation.csv
@@ -63,7 +64,7 @@ valid_settings:
 #  valid_path: ./ptm_data/valid/Succinylation.csv
 #  valid_path: ./ptm_data/valid/Ubiquitylation.csv
 
-  batch_size: 8
+  batch_size: 64
   num_workers: 0
 
 optimizer:

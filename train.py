@@ -11,14 +11,19 @@ import tqdm
 import torchmetrics
 from torch.amp import GradScaler, autocast
 import torch.nn.functional as F
+import copy
+from collections import defaultdict
+from sklearn.metrics import f1_score as sk_f1
 
-def calculate_loss(logits, labels, smoothed_pos_weight=None, device='cuda', alpha=0.9, use_focal_loss=False, gamma=2.0, label_smoothing=0.0):
+
+def calculate_loss(logits, labels, condition_idx = None, smoothed_pos_weight=None, device='cuda', alpha=0.9, use_focal_loss=False, gamma=2.0, label_smoothing=0.0, **kwargs):
     """
     Calculates the loss using either weighted BCE or focal loss.
 
     Args:
         logits (Tensor): Logits output from the model.
         labels (Tensor): Ground truth labels.
+        condition_idx (Tensor): Index of PTM condition to use. To be implemented in the future for dynamic loss via PTM type
         smoothed_pos_weight (float, optional): Smoothed positive class weight. Defaults to None.
         device (str): Device to use (e.g., 'cuda' or 'cpu').
         alpha (float): Weight smoothing parameter for dynamic class balancing. Defaults to 0.9.
@@ -30,6 +35,8 @@ def calculate_loss(logits, labels, smoothed_pos_weight=None, device='cuda', alph
         Tensor: The calculated loss.
         float: Updated smoothed positive weight.
     """
+    configs = kwargs.get('configs', None)
+    use_decoder_block = configs.model.use_decoder_block if configs.model.use_decoder_block else False
     # ========================
     # 1. Dynamic Positive Weight
     # ========================
@@ -82,6 +89,14 @@ def calculate_loss(logits, labels, smoothed_pos_weight=None, device='cuda', alph
         reduction='none'
     )
 
+ #TODO: Sort this logic out    
+    # bce_loss = F.binary_cross_entropy_with_logits(
+    #     logits.view(-1),
+    #     smoothed_labels.view(-1),
+    #     reduction='none'
+    # )
+    # bce_loss = bce_loss.view_as(logits)
+
     # ========================
     # 4. Optional Focal Loss
     # ========================
@@ -122,6 +137,8 @@ def training_loop(model, trainloader, optimizer, epoch, device, scaler, schedule
     running_loss = 0.0
 
     smoothed_pos_weight = None
+    configs = kwargs.get("configs", None)
+    use_decoder_block = configs.model.use_decoder_block if configs.model.use_decoder_block else False
 
     # For logging within each epoch instead of just once every epoch since each epoch takes a long time, logging 100 times per epoch
     log_interval = max(len(trainloader) // 100, 1)
@@ -142,19 +159,35 @@ def training_loop(model, trainloader, optimizer, epoch, device, scaler, schedule
         else:
             autocast_dtype = None
         with autocast(device_type=device.type, dtype = autocast_dtype):
-            outputs = model(input_ids=inputs, attention_mask=attention_mask)
-            logits = outputs
-
-            loss, smoothed_pos_weight = calculate_loss(
-                logits=logits,
-                labels=labels,
-                smoothed_pos_weight=smoothed_pos_weight,
-                device=device,
-                alpha=alpha,
-                use_focal_loss=True,
-                gamma=gamma,
-                label_smoothing=label_smoothing
-            )
+            if use_decoder_block:
+                condition_idx = batch["condition_idx"].to(device)
+                outputs = model(input_ids=inputs, attention_mask=attention_mask, condition_idx=condition_idx)
+                logits = outputs
+                loss, smoothed_pos_weight = calculate_loss(
+                    logits=logits,
+                    labels=labels,
+                    smoothed_pos_weight=smoothed_pos_weight,
+                    device=device,
+                    alpha=alpha,
+                    use_focal_loss=True,
+                    gamma=gamma,
+                    label_smoothing=label_smoothing,
+                    configs=configs
+                )
+            else:
+                outputs = model(input_ids=inputs, attention_mask=attention_mask)
+                logits = outputs
+                loss, smoothed_pos_weight = calculate_loss(
+                    logits=logits,
+                    labels=labels,
+                    smoothed_pos_weight=smoothed_pos_weight,
+                    device=device,
+                    alpha=alpha,
+                    use_focal_loss=True,
+                    gamma=gamma,
+                    label_smoothing=label_smoothing,
+                    configs=configs
+                )
 
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
@@ -214,6 +247,8 @@ def validation_loop(model, testloader, epoch, device, valid_writer=None, alpha =
     valid_loss = 0.0
 
     smoothed_pos_weight = None
+    configs = kwargs.get("configs", None)
+    use_decoder_block = configs.model.use_decoder_block if configs.model.use_decoder_block else False
 
     for i, batch in tqdm.tqdm(enumerate(testloader), total=len(testloader), desc=f"Validation Epoch {epoch + 1}", leave=False):
         inputs = batch["input_ids"].to(device)
@@ -222,19 +257,35 @@ def validation_loop(model, testloader, epoch, device, valid_writer=None, alpha =
 
         with torch.no_grad():
             with autocast(device_type=device.type):
-                outputs = model(input_ids=inputs, attention_mask=attention_mask)
-                logits = outputs
-
-                loss, smoothed_pos_weight = calculate_loss(
-                    logits=logits,
-                    labels=labels,
-                    smoothed_pos_weight=smoothed_pos_weight,
-                    device=device,
-                    alpha=alpha,
-                    use_focal_loss=True,
-                    gamma=gamma,
-                    label_smoothing=label_smoothing
-                )
+                if use_decoder_block:
+                    condition_idx = batch["condition_idx"].to(device)
+                    outputs = model(input_ids=inputs, attention_mask=attention_mask, condition_idx=condition_idx)
+                    logits = outputs
+                    loss, smoothed_pos_weight = calculate_loss(
+                        logits=logits,
+                        labels=labels,
+                        smoothed_pos_weight=smoothed_pos_weight,
+                        device=device,
+                        alpha=alpha,
+                        use_focal_loss=True,
+                        gamma=gamma,
+                        label_smoothing=label_smoothing,
+                        configs=configs
+                    )
+                else:
+                    outputs = model(input_ids=inputs, attention_mask=attention_mask)
+                    logits = outputs
+                    loss, smoothed_pos_weight = calculate_loss(
+                        logits=logits,
+                        labels=labels,
+                        smoothed_pos_weight=smoothed_pos_weight,
+                        device=device,
+                        alpha=alpha,
+                        use_focal_loss=True,
+                        gamma=gamma,
+                        label_smoothing=label_smoothing,
+                        configs=configs
+                    )
                 valid_loss += loss.item()
 
             predictions = torch.sigmoid(logits) > 0.5
@@ -255,7 +306,7 @@ def validation_loop(model, testloader, epoch, device, valid_writer=None, alpha =
 
     print(f"Validation Accuracy: {100 * valid_acc:.2f}%, F1 Score: {valid_f1:.2f}")
 
-    return avg_valid_loss
+    return avg_valid_loss, valid_f1
 
 def evaluation_loop(model, testloader, device, log_confidences=False, alpha = 0.9, gamma = 2.0, label_smoothing = 0.0, **kwargs):
     """
@@ -290,6 +341,12 @@ def evaluation_loop(model, testloader, device, log_confidences=False, alpha = 0.
     false_negative_confidences = [] if log_confidences else None
 
     smoothed_pos_weight = None
+    configs = kwargs.get("configs", None)
+    use_decoder_block = configs.model.use_decoder_block if configs.model.use_decoder_block else False
+    if use_decoder_block:
+        condition_preds_labels = defaultdict(list)
+        condition_names = configs.ptm_types if hasattr(configs, "ptm_types") else []
+        idx_to_condition = {idx: name for idx, name in enumerate(condition_names)}
 
     for i, batch in tqdm.tqdm(enumerate(testloader), total=len(testloader), desc="Testing Model"):
         inputs = batch["input_ids"].to(device)
@@ -298,25 +355,51 @@ def evaluation_loop(model, testloader, device, log_confidences=False, alpha = 0.
 
         with torch.no_grad():
             with autocast(device_type=device.type):
-                outputs = model(input_ids=inputs, attention_mask=attention_mask)
-                logits = outputs
-
-                loss, smoothed_pos_weight = calculate_loss(
-                    logits=logits,
-                    labels=labels,
-                    smoothed_pos_weight=smoothed_pos_weight,
-                    device=device,
-                    alpha=alpha,
-                    use_focal_loss=True,
-                    gamma=gamma,
-                    label_smoothing=label_smoothing
-                )
+                if use_decoder_block:
+                    condition_idx = batch["condition_idx"].to(device)
+                    outputs = model(input_ids=inputs, attention_mask=attention_mask, condition_idx=condition_idx)
+                    logits = outputs
+                    loss, smoothed_pos_weight = calculate_loss(
+                        logits=logits,
+                        labels=labels,
+                        smoothed_pos_weight=smoothed_pos_weight,
+                        device=device,
+                        alpha=alpha,
+                        use_focal_loss=True,
+                        gamma=gamma,
+                        label_smoothing=label_smoothing,
+                        configs=configs
+                    )
+                else:
+                    outputs = model(input_ids=inputs, attention_mask=attention_mask)
+                    logits = outputs
+                    loss, smoothed_pos_weight = calculate_loss(
+                        logits=logits,
+                        labels=labels,
+                        smoothed_pos_weight=smoothed_pos_weight,
+                        device=device,
+                        alpha=alpha,
+                        use_focal_loss=True,
+                        gamma=gamma,
+                        label_smoothing=label_smoothing,
+                        configs=configs
+                    )
                 test_loss += loss.item()
 
             # Convert logits to probabilities
             probabilities = torch.sigmoid(logits).cpu().numpy().flatten()
             predictions = (probabilities > 0.5).astype(int)  # Convert to binary labels
             labels_flat = labels.cpu().numpy().flatten()
+
+            if use_decoder_block:
+                batch_size, seq_len = logits.shape[:2]
+                for b in range(batch_size):
+                    cond = int(condition_idx[b].item())
+                    for t in range(seq_len):
+                        if attention_mask[b][t]:
+                            pred = predictions[b * seq_len + t]
+                            true = labels_flat[b * seq_len + t]
+                            condition_preds_labels[cond].append((pred, true))
 
             # Store incorrect prediction confidence scores only if log_confidences is True
             if log_confidences:
@@ -377,6 +460,21 @@ def evaluation_loop(model, testloader, device, log_confidences=False, alpha = 0.
         print(f"Average Confidence of False Negatives: {avg_fn_confidence:.4f}")
         print(f"Top 10 Incorrect Confidence Scores: {sorted(incorrect_confidences, reverse=True)[:10]}")
 
+    print("\n=== F1 Score Per PTM Type ===")
+    ptm_f1s = []
+    for cond_idx, pairs in condition_preds_labels.items():
+        preds, trues = zip(*pairs)
+        f1 = sk_f1(trues, preds, zero_division=0)
+        ptm_f1s.append(f1)
+        ptm_name = idx_to_condition.get(cond_idx, str(cond_idx))
+        print(f"{ptm_name}: F1 = {f1:.4f} ({len(pairs)} classification points)")
+
+    if ptm_f1s:
+        macro_f1 = np.mean(ptm_f1s)
+        print(f"\nMacro F1 Score (Average across {len(ptm_f1s)} PTMs): {macro_f1:.4f}")
+    else:
+        print("\nMacro F1 Score: N/A (no PTM data)")
+
     # Return metrics for further analysis
     return {
         "loss": avg_test_loss,
@@ -392,6 +490,19 @@ def evaluation_loop(model, testloader, device, log_confidences=False, alpha = 0.
     }
 
 def main(dict_config, config_file_path):
+    # Config flags
+    train = False
+    test = True
+    on_hellbender = True
+    save_best_checkpoint_only = True
+    use_checkpoint = True
+    visualize = False
+
+    if use_checkpoint:
+        load_checkpoint_path = "/home/dc57y/data/2025-04-17__20-30-38__ALL/checkpoints/checkpoint_epoch_2.pth"
+    else:
+        load_checkpoint_path = None
+    
     configs = load_configs(dict_config)
 
     if isinstance(configs.fix_seed, int):
@@ -399,7 +510,6 @@ def main(dict_config, config_file_path):
         np.random.seed(configs.fix_seed)
 
     dataloaders = prepare_dataloaders(configs)
-    # dataloaders = prepare_dataloaders(configs, debug=True, debug_subset_size=50)
 
     trainloader = dataloaders["train"]
     validloader = dataloaders["valid"]
@@ -424,42 +534,6 @@ def main(dict_config, config_file_path):
     scaler = GradScaler()
     start_epoch = 0
 
-    # Best Acetylation
-    # load_checkpoint_path = "results/test/2025-02-09__02-35-24__Acetylation/checkpoints/checkpoint_epoch_7.pth"
-
-    # Best Methylation
-    # load_checkpoint_path = "results/test/2025-02-09__01-21-38__Methylation/checkpoints/checkpoint_epoch_20.pth"
-
-    # Best N-linked Glycosylation
-    # load_checkpoint_path = "results/test/2025-02-08__18-38-57__N-linked_Glycosylation/checkpoints/checkpoint_epoch_21.pth" # 24 epoch
-    # load_checkpoint_path = "results/test/2025-02-09__03-59-39__N-linked_Glycosylation/checkpoints/checkpoint_epoch_16.pth" # Best 48 epoch
-
-    # Best O-linked Glycosylation
-    # load_checkpoint_path = "results/test/2025-02-07__23-39-18__O-linked_Glycosylation/checkpoints/checkpoint_epoch_22.pth" # Best overall
-    load_checkpoint_path = "results/test/2025-02-08__18-28-52__O-linked_Glycosylation/checkpoints/checkpoint_epoch_8.pth" # Best using same hyperparameters
-    # Ablation testing without focal loss
-    # load_checkpoint_path = "results/test/2025-02-10__13-38-42__O-linked_Glycosylation/checkpoints/checkpoint_epoch_24.pth" # without focal loss
-    # load_checkpoint_path = "results/test/2025-02-07__23-17-14__O-linked_Glycosylation/checkpoints/checkpoint_epoch_24.pth" # with focal loss
-
-
-    # Best Phosphorylation
-    # load_checkpoint_path = "results/test/2025-02-08__01-16-08__Phosphorylation/checkpoints/checkpoint_epoch_24.pth" # 24 epoch
-    # load_checkpoint_path = "results/test/2025-02-08__10-02-20__Phosphorylation/checkpoints/checkpoint_epoch_12.pth" # Best 48 epoch
-
-    # Best phosphorylation_S_and_T
-
-    # Best phosphorylation_Y
-    # load_checkpoint_path = "results/test/2025-02-04__01-38-14/checkpoints/checkpoint_epoch_9.pth"
-
-    # Best Succinylation
-    # load_checkpoint_path = "results/test/2025-02-09__13-01-05__Succinylation/checkpoints/checkpoint_epoch_14.pth"
-
-    # Best Ubiquitylation
-    # load_checkpoint_path = "results/test/2025-02-09__11-09-06__Ubiquitylation/checkpoints/checkpoint_epoch_3.pth"
-
-    # Fresh start
-    # load_checkpoint_path = None
-
     if not load_checkpoint_path:
         print("Training without using any checkpoints")
 
@@ -468,35 +542,54 @@ def main(dict_config, config_file_path):
         # start_epoch = load_checkpoint(load_checkpoint_path, model, optimizer, scheduler, scaler) + 1
         # start_epoch = load_checkpoint(load_checkpoint_path, model=model, optimizer=None, scheduler=scheduler, scaler=scaler) + 1
         start_epoch = load_checkpoint(load_checkpoint_path, model) + 1
-        start_epoch = 0
+        # start_epoch = 0
 
-        visualize = False
         if visualize:
             visualize_predictions(model, testloader, device, num_sequences=10)
             return
+    
+    if save_best_checkpoint_only:
+        best_f1 = -1.0
+        best_model_state = None
+        best_epoch = -1
 
-    train = True
     if train:
-        result_path, checkpoint_path = prepare_saving_dir(configs, config_file_path)
+        result_path, checkpoint_path = prepare_saving_dir(configs, config_file_path, save_to_data=on_hellbender)
         train_writer, valid_writer = prepare_tensorboard(result_path)
 
         for epoch in range(start_epoch, num_epochs):
 
             training_loop(model, trainloader, optimizer, epoch, device, scaler, scheduler, train_writer=train_writer, grad_clip_norm=grad_clip_norm, alpha=alpha, gamma=gamma, label_smoothing=label_smoothing, configs=configs)
-            validation_loop(model, validloader, epoch, device, valid_writer=valid_writer, alpha=alpha, gamma=gamma, configs=configs, label_smoothing=label_smoothing,)
-
+            _, valid_f1 = validation_loop(model, validloader, epoch, device, valid_writer=valid_writer, alpha=alpha, gamma=gamma, label_smoothing=label_smoothing, configs=configs)
             scheduler.step()
-            # gamma = gamma + 0.1 * (epoch + 1)
-            # gamma = min(gamma, 2)
-            # gamma = 2
 
-            if (epoch + 1) % checkpoint_every == 0:
-                save_checkpoint(model, optimizer, scheduler, scaler, epoch, checkpoint_path)
-    test = True
+            if save_best_checkpoint_only:
+                if valid_f1 > best_f1:
+                    best_f1 = valid_f1
+                    best_model_state = {
+                        'model': copy.deepcopy(model.state_dict()),
+                        'optimizer': copy.deepcopy(optimizer.state_dict()),
+                        'scheduler': copy.deepcopy(scheduler.state_dict()),
+                        'scaler': copy.deepcopy(scaler.state_dict()),
+                        'epoch': epoch
+                    }
+            else:
+                if (epoch + 1) % checkpoint_every == 0:
+                    save_checkpoint(model, optimizer, scheduler, scaler, epoch, checkpoint_path)
+
+        if save_best_checkpoint_only and best_f1 > -1:
+            model.load_state_dict(best_model_state['model'])
+            optimizer.load_state_dict(best_model_state['optimizer'])
+            scheduler.load_state_dict(best_model_state['scheduler'])
+            scaler.load_state_dict(best_model_state['scaler'])
+            save_checkpoint(model, optimizer, scheduler, scaler, best_model_state['epoch'], checkpoint_path)
+
+        print(f"Best Validation F1 Score: {best_f1:.4f}")
+
     if test:
         print("Testing model on test dataset")
         load_checkpoint(load_checkpoint_path, model, optimizer, scheduler, scaler)
-        results = evaluation_loop(model, testloader, device, log_confidences=True, alpha=alpha, gamma=gamma, label_smoothing=label_smoothing)
+        results = evaluation_loop(model, testloader, device, log_confidences=True, alpha=alpha, gamma=gamma, label_smoothing=label_smoothing, configs=configs)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Fine-tune the PTM model')
