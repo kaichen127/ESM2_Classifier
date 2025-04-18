@@ -484,15 +484,15 @@ def evaluation_loop(model, testloader, device, log_confidences=False, alpha = 0.
 
 def main(dict_config, config_file_path):
     # Config flags
-    train = True
-    test = True
+    train = False
+    test = False
     on_hellbender = True
     save_best_checkpoint_only = True
-    use_checkpoint = False
-    visualize = False
+    use_checkpoint = True
+    visualize = True
 
     if use_checkpoint:
-        load_checkpoint_path = "/home/dc57y/data/2025-04-17__20-30-38__ALL/checkpoints/checkpoint_epoch_2.pth"
+        load_checkpoint_path = "/home/dc57y/data/2025-04-17__22-16-12__ALL/checkpoints/checkpoint_epoch_22.pth"
     else:
         load_checkpoint_path = None
     
@@ -538,7 +538,7 @@ def main(dict_config, config_file_path):
         # start_epoch = 0
 
         if visualize:
-            visualize_predictions(model, testloader, device, num_sequences=10)
+            visualize_predictions(model, testloader, device, num_sequences=10, configs=configs)
             return
     
     if save_best_checkpoint_only:
