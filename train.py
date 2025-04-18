@@ -70,7 +70,7 @@ def calculate_loss(logits, labels, condition_idx = None, smoothed_pos_weight=Non
         eps = label_smoothing
         # smoothed_labels = labels.float() * (1.0 - eps) + 0.5 * eps
 
-        # Experimental smooth less for negative class since the positive weight can be very large
+        # Experimental: smooth less for negative class since the positive weight can be very large
         smoothed_labels = labels.float() * (1.0 - eps) + 0.01 * eps
 
         # Experimental: only smooth for the positive class to prevent overconfident false positives
@@ -88,14 +88,6 @@ def calculate_loss(logits, labels, condition_idx = None, smoothed_pos_weight=Non
         pos_weight=pos_weight_tensor,
         reduction='none'
     )
-
- #TODO: Sort this logic out    
-    # bce_loss = F.binary_cross_entropy_with_logits(
-    #     logits.view(-1),
-    #     smoothed_labels.view(-1),
-    #     reduction='none'
-    # )
-    # bce_loss = bce_loss.view_as(logits)
 
     # ========================
     # 4. Optional Focal Loss
