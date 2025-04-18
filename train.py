@@ -491,11 +491,11 @@ def evaluation_loop(model, testloader, device, log_confidences=False, alpha = 0.
 
 def main(dict_config, config_file_path):
     # Config flags
-    train = False
+    train = True
     test = True
     on_hellbender = True
     save_best_checkpoint_only = True
-    use_checkpoint = True
+    use_checkpoint = False
     visualize = False
 
     if use_checkpoint:
@@ -588,7 +588,8 @@ def main(dict_config, config_file_path):
 
     if test:
         print("Testing model on test dataset")
-        load_checkpoint(load_checkpoint_path, model, optimizer, scheduler, scaler)
+        if use_checkpoint:
+            load_checkpoint(load_checkpoint_path, model, optimizer, scheduler, scaler)
         results = evaluation_loop(model, testloader, device, log_confidences=True, alpha=alpha, gamma=gamma, label_smoothing=label_smoothing, configs=configs)
 
 if __name__ == '__main__':
