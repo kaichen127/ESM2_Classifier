@@ -452,20 +452,21 @@ def evaluation_loop(model, testloader, device, log_confidences=False, alpha = 0.
         print(f"Average Confidence of False Negatives: {avg_fn_confidence:.4f}")
         print(f"Top 10 Incorrect Confidence Scores: {sorted(incorrect_confidences, reverse=True)[:10]}")
 
-    print("\n=== F1 Score Per PTM Type ===")
-    ptm_f1s = []
-    for cond_idx, pairs in condition_preds_labels.items():
-        preds, trues = zip(*pairs)
-        f1 = sk_f1(trues, preds, zero_division=0)
-        ptm_f1s.append(f1)
-        ptm_name = idx_to_condition.get(cond_idx, str(cond_idx))
-        print(f"{ptm_name}: F1 = {f1:.4f} ({len(pairs)} classification points)")
+    if use_decoder_block:
+        print("\n=== F1 Score Per PTM Type ===")
+        ptm_f1s = []
+        for cond_idx, pairs in condition_preds_labels.items():
+            preds, trues = zip(*pairs)
+            f1 = sk_f1(trues, preds, zero_division=0)
+            ptm_f1s.append(f1)
+            ptm_name = idx_to_condition.get(cond_idx, str(cond_idx))
+            print(f"{ptm_name}: F1 = {f1:.4f} ({len(pairs)} classification points)")
 
-    if ptm_f1s:
-        macro_f1 = np.mean(ptm_f1s)
-        print(f"\nMacro F1 Score (Average across {len(ptm_f1s)} PTMs): {macro_f1:.4f}")
-    else:
-        print("\nMacro F1 Score: N/A (no PTM data)")
+        if ptm_f1s:
+            macro_f1 = np.mean(ptm_f1s)
+            print(f"\nMacro F1 Score (Average across {len(ptm_f1s)} PTMs): {macro_f1:.4f}")
+        else:
+            print("\nMacro F1 Score: N/A (no PTM data)")
 
     # Return metrics for further analysis
     return {
