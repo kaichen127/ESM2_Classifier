@@ -1,6 +1,6 @@
-# 🧬 Post-Translational Modification (PTM) — ESM2 Classifier
+# 🧬 Post-Translational Modification (PTM) Site Prediction Model
 
-This project uses Facebook’s [ESM2](https://github.com/facebookresearch/esm) protein language model as a backbone to perform **classification of PTM (Post-Translational Modification) sites** in protein sequences.
+This project uses Facebook’s [ESM2](https://github.com/facebookresearch/esm) protein language model as a backbone to predict potential post-translational modifications (PTMs) in protein sequences. 
 
 ## 🚀 Features
 
